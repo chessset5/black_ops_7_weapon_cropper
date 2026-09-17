@@ -19,7 +19,7 @@ CROP_Y2 = 1038
 CROP_X1 = 1582
 CROP_X2 = 1755
 
-# Relative 'E' box coordinates derived from (1717, 885) -> (1746, 910)
+# Relative 'E' box bounds inside the cropped frame
 E_Y1, E_Y2 = 885 - CROP_Y1, 910 - CROP_Y1  # 12 to 37
 E_X1, E_X2 = 1717 - CROP_X1, 1746 - CROP_X1  # 135 to 164
 
@@ -34,10 +34,14 @@ if os.path.exists(EMPTY_REF_PATH):
 
 
 def has_e_box(cropped_frame):
-    """Fast check for the white 'E' keybind box at exact pixel bounds."""
+    """Returns True only if >50% of the 'E' box pixels are bright white."""
     e_region = cropped_frame[E_Y1:E_Y2, E_X1:E_X2]
     gray = cv2.cvtColor(e_region, cv2.COLOR_BGR2GRAY)
-    return (gray > 220).sum() > 30  # High-brightness white pixel count
+
+    white_pixel_count = (gray > 200).sum()
+    total_pixels = gray.size
+
+    return white_pixel_count > (total_pixels / 2)
 
 
 def format_timestamp(ms):
@@ -74,21 +78,13 @@ def is_hud_present(cropped_frame):
 def process_frame_worker(data):
     frame_idx, timestamp_ms, cropped_frame = data
 
-    # 1. Fast check for 'E' box
+    # Ignore frame if 'E' box lacks a majority of white pixels
     if not has_e_box(cropped_frame):
         return frame_idx, timestamp_ms, cropped_frame, None, False
 
-    # 2. Hash cropped image
     rgb_crop = cv2.cvtColor(cropped_frame, cv2.COLOR_BGR2RGB)
     pil_img = Image.fromarray(rgb_crop)
     current_hash = imagehash.dhash(pil_img)
-
-    # 3. Reject if frame matches the empty wheel background (no weapon drawn)
-    if EMPTY_WHEEL_HASH is not None:
-        if (current_hash - EMPTY_WHEEL_HASH) <= 3:
-            return frame_idx, timestamp_ms, cropped_frame, None, False
-
-    return frame_idx, timestamp_ms, cropped_frame, current_hash, True
 
     return frame_idx, timestamp_ms, cropped_frame, current_hash, True
 
