@@ -14,10 +14,30 @@ BATCH_SIZE = 300  # Frames per batch in RAM
 PADDING_HEIGHT = 28  # Height of the black footer bar for the timestamp
 
 # Crop Coordinates (Top Left: 1582, 873 | Bottom Right: 1755, 1083)
-CROP_Y1 = 850
-CROP_Y2 = 1045
+CROP_Y1 = 873
+CROP_Y2 = 1038
 CROP_X1 = 1582
 CROP_X2 = 1755
+
+# Relative 'E' box coordinates derived from (1717, 885) -> (1746, 910)
+E_Y1, E_Y2 = 885 - CROP_Y1, 910 - CROP_Y1  # 12 to 37
+E_X1, E_X2 = 1717 - CROP_X1, 1746 - CROP_X1  # 135 to 164
+
+# Load empty background reference to ignore empty wheel frames
+EMPTY_REF_PATH = "frame_01446.jpg"  # Path to your clean background image
+EMPTY_WHEEL_HASH = None
+
+if os.path.exists(EMPTY_REF_PATH):
+    ref_img = Image.open(EMPTY_REF_PATH)
+    # Exclude timestamp padding if present when hashing reference
+    EMPTY_WHEEL_HASH = imagehash.dhash(ref_img)
+
+
+def has_e_box(cropped_frame):
+    """Fast check for the white 'E' keybind box at exact pixel bounds."""
+    e_region = cropped_frame[E_Y1:E_Y2, E_X1:E_X2]
+    gray = cv2.cvtColor(e_region, cv2.COLOR_BGR2GRAY)
+    return (gray > 220).sum() > 30  # High-brightness white pixel count
 
 
 def format_timestamp(ms):
@@ -52,21 +72,23 @@ def is_hud_present(cropped_frame):
 
 
 def process_frame_worker(data):
-    """
-    Worker function executed across CPU cores.
-    Checks HUD presence and computes perceptual hash.
-    """
     frame_idx, timestamp_ms, cropped_frame = data
 
-    # 1. Check if the circle/HUD is present
-    hud_visible = is_hud_present(cropped_frame)
-    if not hud_visible:
+    # 1. Fast check for 'E' box
+    if not has_e_box(cropped_frame):
         return frame_idx, timestamp_ms, cropped_frame, None, False
 
-    # 2. Compute difference hash on the valid HUD crop
+    # 2. Hash cropped image
     rgb_crop = cv2.cvtColor(cropped_frame, cv2.COLOR_BGR2RGB)
     pil_img = Image.fromarray(rgb_crop)
     current_hash = imagehash.dhash(pil_img)
+
+    # 3. Reject if frame matches the empty wheel background (no weapon drawn)
+    if EMPTY_WHEEL_HASH is not None:
+        if (current_hash - EMPTY_WHEEL_HASH) <= 3:
+            return frame_idx, timestamp_ms, cropped_frame, None, False
+
+    return frame_idx, timestamp_ms, cropped_frame, current_hash, True
 
     return frame_idx, timestamp_ms, cropped_frame, current_hash, True
 
