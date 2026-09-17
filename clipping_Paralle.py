@@ -14,8 +14,8 @@ BATCH_SIZE = 300  # Frames per batch in RAM
 PADDING_HEIGHT = 28  # Height of the black footer bar for the timestamp
 
 # Crop Coordinates (Top Left: 1582, 873 | Bottom Right: 1755, 1083)
-CROP_Y1 = 873
-CROP_Y2 = 1083
+CROP_Y1 = 850
+CROP_Y2 = 1045
 CROP_X1 = 1582
 CROP_X2 = 1755
 
