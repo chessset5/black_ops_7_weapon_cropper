@@ -1,12 +1,13 @@
-import os
-import cv2
 import datetime
 import multiprocessing
-import numpy as np
+import os
 from concurrent.futures import ProcessPoolExecutor
-from PIL import Image
-import imagehash
 from pathlib import Path
+
+import cv2
+import imagehash
+import numpy as np
+from PIL import Image
 
 # Configuration
 HASH_THRESHOLD = 4

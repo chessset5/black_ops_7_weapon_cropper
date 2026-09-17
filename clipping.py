@@ -4,25 +4,32 @@ from pathlib import Path
 
 import cv2
 import imagehash
+import numpy as np
 from PIL import Image
 
 # Configuration
-HASH_THRESHOLD = 4  # Lower = stricter matching, higher = looser matching
+HASH_THRESHOLD = 4
+PADDING_HEIGHT = 28
 
-# Crop Coordinates (Top Left: 1582, 873 | Bottom Right: 1755, 1083)
-# Note: Using 1083 instead of 1038 to ensure the bounding box covers the largest Y axis requested
-CROP_Y1 = 873
-CROP_Y2 = 1038
-CROP_X1 = 1582
-CROP_X2 = 1755
+# Crop Coordinates
+CROP_Y1, CROP_Y2 = 877, 1038
+CROP_X1, CROP_X2 = 1581, 1755
+
+# Sub-box relative coordinates inside the crop
+SUB_REL_Y1 = 938 - CROP_Y1  # 61
+SUB_REL_Y2 = 992 - CROP_Y1  # 115
+SUB_REL_X1 = 1640 - CROP_X1  # 59
+SUB_REL_X2 = 1700 - CROP_X1  # 119
+
+# Weapon RGB Color Range (66 to 82)
+LOWER_RGB = np.array([66, 66, 66], dtype=np.uint8)
+UPPER_RGB = np.array([82, 82, 82], dtype=np.uint8)
 
 
 def format_timestamp(ms):
-    """Converts milliseconds into a readable HH:MM:SS.mmm string."""
     if ms < 0:
         return "Unknown Time"
     td = datetime.timedelta(milliseconds=ms)
-    # Format to keep it concise and include milliseconds
     return str(td)[:-3]
 
 
@@ -32,20 +39,17 @@ def extract_and_deduplicate(output_dir, video_path, hash_threshold=4):
         return
 
     os.makedirs(output_dir, exist_ok=True)
-
-    os.chdir(os.path.dirname(video_path))
-
-    # OpenCV will use FFmpeg backend to read the session.mpd and parse the .m4s chunks
     cap = cv2.VideoCapture(str(video_path))
+
     if not cap.isOpened():
-        print("Error: Could not open video/mpd stream.")
+        print("Error: Could not open video file.")
         return
 
     frame_count = 0
     saved_count = 0
     last_saved_hash = None
 
-    print("Processing video frames and cropping...")
+    print("Processing video frames sequentially...")
 
     while True:
         ret, frame = cap.read()
@@ -53,54 +57,51 @@ def extract_and_deduplicate(output_dir, video_path, hash_threshold=4):
             break
 
         frame_count += 1
-
-        # 1. Crop the frame to the specified bottom-left coordinates
-        # OpenCV frames are numpy arrays indexed via [y1:y2, x1:x2]
         cropped_frame = frame[CROP_Y1:CROP_Y2, CROP_X1:CROP_X2]
+        timestamp_ms = cap.get(cv2.CAP_PROP_POS_MSEC)
 
-        # 2. Convert cropped OpenCV BGR frame to PIL Image for imagehash
-        rgb_crop = cv2.cvtColor(cropped_frame, cv2.COLOR_BGR2RGB)
-        pil_img = Image.fromarray(rgb_crop)
+        # 1. Create binary mask isolating weapon pixels (RGB 66-82)
+        weapon_mask = cv2.inRange(cropped_frame, LOWER_RGB, UPPER_RGB)
 
-        # 3. Compute difference hash (dhash) on the CROP only
-        current_hash = imagehash.dhash(pil_img)
+        # 2. Check sub-box pixel density (minimum 10% weapon pixels)
+        sub_box_mask = weapon_mask[SUB_REL_Y1:SUB_REL_Y2, SUB_REL_X1:SUB_REL_X2]
+        if (sub_box_mask > 0).mean() < 0.10:
+            continue
 
-        # 4. Check if current cropped frame is a duplicate
+        # 3. Deduplicate based solely on weapon mask hash
+        pil_mask = Image.fromarray(weapon_mask)
+        current_hash = imagehash.dhash(pil_mask)
+
         if last_saved_hash is not None:
             hash_diff = current_hash - last_saved_hash
             if hash_diff <= hash_threshold:
-                # Skip duplicate frame
                 continue
 
-        # 5. Get the timestamp from the video stream
-        timestamp_ms = cap.get(cv2.CAP_PROP_POS_MSEC)
-        time_str = format_timestamp(timestamp_ms)
-
-        # 6. Overlay the timestamp onto the cropped image
-        # Positioned at the bottom left of the crop
-        text_position = (5, cropped_frame.shape[0] - 10)
-        cv2.putText(
-            cropped_frame,
-            time_str,
-            text_position,
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.5,  # Font scale
-            (0, 255, 0),  # Color (Green)
-            1,  # Thickness
-            cv2.LINE_AA,
+        # 4. Add black padding footer for timeline
+        padded_frame = cv2.copyMakeBorder(
+            cropped_frame, 0, PADDING_HEIGHT, 0, 0,
+            borderType=cv2.BORDER_CONSTANT, value=[0, 0, 0]
         )
 
-        # 7. Save frame sequentially to maintain chronological order
+        time_str = format_timestamp(timestamp_ms)
+        cv2.putText(
+            padded_frame, time_str, (8, cropped_frame.shape[0] + 19),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1, cv2.LINE_AA
+        )
+
+        # 5. Save with maximum JPEG quality (100)
         saved_count += 1
         output_filename = os.path.join(output_dir, f"frame_{saved_count:05d}.jpg")
-        cv2.imwrite(output_filename, cropped_frame)
+        cv2.imwrite(output_filename, padded_frame, [int(cv2.IMWRITE_JPEG_QUALITY), 100])
 
-        # Update the hash of the last unique frame saved
         last_saved_hash = current_hash
 
+        if frame_count % 500 == 0:
+            print(f"Processed {frame_count} frames... (Saved {saved_count} unique weapon frames)")
+
     cap.release()
-    print(f"Done! Processed {frame_count} total frames.")
-    print(f"Saved {saved_count} unique cropped frames to '{output_dir}'.")
+    print(f"\nDone! Processed {frame_count} total frames.")
+    print(f"Saved {saved_count} unique weapon crops to '{output_dir}'.")
 
 
 if __name__ == "__main__":
